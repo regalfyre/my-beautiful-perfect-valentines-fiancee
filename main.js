@@ -1,393 +1,426 @@
-// main.js (Three.js global build + PointerLockControls global build)
-// Uses window.THREE and window.PointerLockControls from index.html scripts.
-
-const { Scene, Color, PerspectiveCamera, WebGLRenderer, AmbientLight, PointLight,
-        PlaneGeometry, MeshStandardMaterial, MeshBasicMaterial, Mesh,
-        CylinderGeometry, Group, ShaderMaterial, TextureLoader,
-        Vector2, Vector3, Raycaster } = THREE;
-
+// main.js
 const overlay = document.getElementById("overlay");
+const mobileUI = document.getElementById("mobileUI");
+const stickBase = document.getElementById("stickBase");
+const stick = document.getElementById("stick");
 
-// ---------- helpers ----------
-async function loadJSON(url) {
-  const res = await fetch(url, { cache: "no-store" });
-  if (!res.ok) throw new Error(`Failed to load ${url}`);
-  return await res.json();
+const isTouch =
+  "ontouchstart" in window ||
+  navigator.maxTouchPoints > 0 ||
+  window.matchMedia?.("(pointer:coarse)")?.matches;
+
+let scene, camera, renderer;
+let controls = null;
+
+let yaw = 0;
+let pitch = 0;
+
+let moveF = 0; // forward/back
+let moveS = 0; // strafe
+let velocity = new THREE.Vector3();
+
+let started = false;
+
+overlay.addEventListener("click", () => start());
+overlay.addEventListener("touchend", (e) => {
+  e.preventDefault();
+  start();
+}, { passive: false });
+
+function start() {
+  if (started) return;
+  started = true;
+
+  overlay.classList.add("hidden");
+  init();
 }
 
-function clamp(n, a, b) { return Math.max(a, Math.min(b, n)); }
+function init() {
+  scene = new THREE.Scene();
+  scene.fog = new THREE.FogExp2(0x000000, 0.055);
 
-// ---------- movement state ----------
-const move = { f:false, b:false, l:false, r:false };
-let controls;
-
-// ---------- core scene ----------
-const scene = new Scene();
-scene.background = new Color(0x05060c);
-
-const camera = new PerspectiveCamera(70, window.innerWidth / window.innerHeight, 0.1, 500);
-camera.position.set(0, 1.65, 14);
-
-const renderer = new WebGLRenderer({ antialias: true });
-renderer.setSize(window.innerWidth, window.innerHeight);
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.6));
-document.body.appendChild(renderer.domElement);
-
-// lights (simple + romantic)
-scene.add(new AmbientLight(0x6b86a8, 0.35));
-const warm = new PointLight(0xffd4ad, 1.25, 65);
-warm.position.set(0, 6, 0);
-scene.add(warm);
-
-// ground (no texture)
-const ground = new Mesh(
-  new PlaneGeometry(120, 120),
-  new MeshStandardMaterial({ color: 0x0c0f16, roughness: 1.0 })
-);
-ground.rotation.x = -Math.PI / 2;
-scene.add(ground);
-
-// ---------- pool + water ----------
-function makeWaterMaterial() {
-  return new ShaderMaterial({
-    transparent: true,
-    uniforms: {
-      uTime: { value: 0.0 },
-      uTint: { value: new THREE.Color(0x12445e) }
-    },
-    vertexShader: `
-      uniform float uTime;
-      varying vec2 vUv;
-      varying float vWave;
-
-      void main() {
-        vUv = uv;
-        vec3 p = position;
-
-        float t = uTime;
-        float w = 0.06*sin(p.x*0.9 + t*1.2)
-                + 0.05*cos(p.y*1.1 + t*0.9)
-                + 0.04*sin((p.x+p.y)*0.7 + t*1.5);
-
-        p.z += w;
-        vWave = w;
-
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(p, 1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform float uTime;
-      uniform vec3 uTint;
-      varying vec2 vUv;
-      varying float vWave;
-
-      float rand(vec2 co){
-        return fract(sin(dot(co.xy, vec2(12.9898,78.233))) * 43758.5453);
-      }
-
-      void main() {
-        vec2 uv = vUv;
-        float t = uTime;
-
-        // subtle shimmer distortion
-        uv += vec2(
-          0.01*sin(uv.y*12.0 + t*0.9),
-          0.01*cos(uv.x*10.0 + t*1.2)
-        );
-
-        float grad = smoothstep(0.0, 1.0, vUv.y);
-        vec3 base = mix(uTint * 0.85, uTint * 1.18, grad);
-
-        float n = rand(uv*220.0 + t*0.02);
-        float sparkle = smoothstep(0.988, 1.0, n) * 0.12;
-
-        float highlight = smoothstep(0.03, 0.10, abs(vWave)) * 0.25;
-
-        vec3 color = base + sparkle + highlight;
-        float alpha = 0.86;
-
-        gl_FragColor = vec4(color, alpha);
-      }
-    `
-  });
-}
-
-function makePool() {
-  const g = new Group();
-
-  // base
-  const base = new Mesh(
-    new CylinderGeometry(2.0, 2.3, 0.5, 64),
-    new MeshStandardMaterial({ color: 0x2a2a2a, roughness: 0.9 })
+  camera = new THREE.PerspectiveCamera(
+    70,
+    window.innerWidth / window.innerHeight,
+    0.05,
+    200
   );
-  base.position.y = 0.25;
-  g.add(base);
+  camera.position.set(0, 1.6, 6);
 
-  // rim (open cylinder)
-  const rim = new Mesh(
-    new CylinderGeometry(2.35, 2.35, 0.25, 64, 1, true),
-    new MeshStandardMaterial({ color: 0x343434, roughness: 0.8, metalness: 0.05 })
+  renderer = new THREE.WebGLRenderer({ antialias: true });
+  renderer.setSize(window.innerWidth, window.innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+  document.body.appendChild(renderer.domElement);
+
+  // Star field
+  addStars();
+
+  // Soft ambient + key
+  scene.add(new THREE.AmbientLight(0xffffff, 0.35));
+  const key = new THREE.DirectionalLight(0xffffff, 0.85);
+  key.position.set(6, 10, 5);
+  scene.add(key);
+
+  // Ground (subtle)
+  const ground = new THREE.Mesh(
+    new THREE.CircleGeometry(40, 64),
+    new THREE.MeshStandardMaterial({
+      color: 0x05060a,
+      roughness: 1,
+      metalness: 0
+    })
   );
-  rim.position.y = 0.55;
-  g.add(rim);
+  ground.rotation.x = -Math.PI / 2;
+  ground.position.y = 0;
+  scene.add(ground);
 
-  // water surface
-  const water = new Mesh(
-    new PlaneGeometry(4.2, 4.2, 140, 140),
-    makeWaterMaterial()
-  );
-  water.rotation.x = -Math.PI / 2;
-  water.position.y = 0.60;
-  g.add(water);
+  // Fountain/pool
+  addFountain();
 
-  g.userData.water = water;
+  // Controls
+  if (!isTouch) {
+    controls = new THREE.PointerLockControls(camera, document.body);
+    document.body.addEventListener("click", () => {
+      // only lock if overlay already gone
+      if (overlay.classList.contains("hidden")) controls.lock();
+    });
+    scene.add(controls.getObject());
 
-  scene.add(g);
-  return g;
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+  } else {
+    mobileUI.classList.remove("hidden");
+    setupTouchLook();
+    setupJoystick();
+  }
+
+  // Load media
+  loadAndPlace();
+
+  window.addEventListener("resize", onResize);
+  animate();
 }
 
-const pool = makePool();
-
-// ---------- poem page on water ----------
-function makePoemPageMaterial(tex) {
-  tex.minFilter = THREE.LinearMipmapLinearFilter;
-  tex.magFilter = THREE.LinearFilter;
-
-  return new ShaderMaterial({
-    transparent: true,
-    uniforms: {
-      uTime: { value: 0.0 },
-      uTex: { value: tex }
-    },
-    vertexShader: `
-      uniform float uTime;
-      varying vec2 vUv;
-
-      void main() {
-        vUv = uv;
-        vec3 p = position;
-
-        float t = uTime;
-        // tiny bob so it feels afloat
-        p.y += 0.02*sin(t*1.3 + p.x*0.5 + p.z*0.5);
-
-        gl_Position = projectionMatrix * modelViewMatrix * vec4(p,1.0);
-      }
-    `,
-    fragmentShader: `
-      uniform float uTime;
-      uniform sampler2D uTex;
-      varying vec2 vUv;
-
-      void main() {
-        float t = uTime;
-        vec2 uv = vUv;
-
-        // gentle ripple warp
-        float ripple = 0.010*sin(uv.x*10.0 + t*1.2)
-                     + 0.010*cos(uv.y*12.0 + t*0.9);
-        uv += vec2(ripple, -ripple);
-
-        vec4 tex = texture2D(uTex, uv);
-
-        // soft brighten (paper presence)
-        tex.rgb = mix(tex.rgb, vec3(1.0), 0.06);
-
-        gl_FragColor = vec4(tex.rgb, tex.a);
-      }
-    `
-  });
-}
-
-const loader = new TextureLoader();
-let poemPage = null;
-
-async function loadPoemFirst(poemURL) {
-  return await new Promise((resolve, reject) => {
-    loader.load(poemURL, resolve, undefined, reject);
-  });
-}
-
-function createPoemPage(tex) {
-  const img = tex.image;
-  const aspect = img ? (img.width / img.height) : 1.0;
-
-  const h = 1.75;
-  const w = h * aspect;
-
-  const page = new Mesh(
-    new PlaneGeometry(w, h, 1, 1),
-    makePoemPageMaterial(tex)
-  );
-
-  page.rotation.x = -Math.PI / 2;
-  page.position.set(0, 0.605, 0); // just above water
-  page.rotation.z = 0.10;         // slight tilt
-
-  scene.add(page);
-  return page;
-}
-
-// ---------- floating photos (only photos of you two) ----------
-function makePhotoRing(urls) {
-  const group = new Group();
-  const count = Math.min(urls.length, 30);
-  const radius = 10.5;
+function addStars() {
+  const starGeo = new THREE.BufferGeometry();
+  const count = 1200;
+  const pos = new Float32Array(count * 3);
 
   for (let i = 0; i < count; i++) {
-    const a = (i / count) * Math.PI * 2;
-    const x = Math.cos(a) * radius;
-    const z = Math.sin(a) * radius;
-
-    const tex = loader.load(urls[i]);
-    tex.minFilter = THREE.LinearMipmapLinearFilter;
-    tex.magFilter = THREE.LinearFilter;
-
-    const mat = new MeshBasicMaterial({ map: tex, transparent: true });
-    const geo = new PlaneGeometry(2.4, 1.8);
-
-    const m = new Mesh(geo, mat);
-    m.position.set(x, 1.6 + Math.random() * 0.9, z);
-    m.rotation.y = -a + Math.PI / 2;
-    m.rotation.z = (Math.random() - 0.5) * 0.22;
-
-    m.userData.phase = Math.random() * Math.PI * 2;
-    m.userData.baseY = m.position.y;
-
-    group.add(m);
+    const r = 60 + Math.random() * 80;
+    const theta = Math.random() * Math.PI * 2;
+    const phi = Math.acos(2 * Math.random() - 1);
+    pos[i * 3 + 0] = r * Math.sin(phi) * Math.cos(theta);
+    pos[i * 3 + 1] = Math.abs(r * Math.cos(phi)) + 2;
+    pos[i * 3 + 2] = r * Math.sin(phi) * Math.sin(theta);
   }
 
-  group.userData.photos = group.children;
-  scene.add(group);
-  return group;
-}
-
-let photoRing = null;
-
-// ---------- soft bounds (keep it a “bounded zone”) ----------
-const BOUND_RADIUS = 18;
-
-function applyBounds(pos) {
-  // keep player inside circle on XZ plane
-  const x = pos.x;
-  const z = pos.z;
-  const d = Math.sqrt(x*x + z*z);
-  if (d > BOUND_RADIUS) {
-    const s = (BOUND_RADIUS - 0.02) / d;
-    pos.x *= s;
-    pos.z *= s;
-  }
-}
-
-// ---------- controls ----------
-function initControls() {
-  controls = new PointerLockControls(camera, document.body);
-  scene.add(controls.getObject());
-
-  overlay.addEventListener("click", () => controls.lock());
-  controls.addEventListener("lock", () => overlay.classList.add("hidden"));
-  controls.addEventListener("unlock", () => overlay.classList.remove("hidden"));
-
-  window.addEventListener("keydown", (e) => {
-    if (e.code === "KeyW") move.f = true;
-    if (e.code === "KeyS") move.b = true;
-    if (e.code === "KeyA") move.l = true;
-    if (e.code === "KeyD") move.r = true;
-  });
-
-  window.addEventListener("keyup", (e) => {
-    if (e.code === "KeyW") move.f = false;
-    if (e.code === "KeyS") move.b = false;
-    if (e.code === "KeyA") move.l = false;
-    if (e.code === "KeyD") move.r = false;
-  });
-}
-
-function updateWalk(dt) {
-  const speed = 5.1;
-
-  const dir = new Vector3(
-    (move.r ? 1 : 0) - (move.l ? 1 : 0),
-    0,
-    (move.b ? 1 : 0) - (move.f ? 1 : 0)
+  starGeo.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+  const stars = new THREE.Points(
+    starGeo,
+    new THREE.PointsMaterial({ color: 0xffffff, size: 0.06 })
   );
-
-  if (dir.lengthSq() > 0) dir.normalize();
-
-  const forward = new Vector3();
-  controls.getDirection(forward);
-  forward.y = 0;
-  forward.normalize();
-
-  const right = new Vector3().crossVectors(forward, new Vector3(0, 1, 0)).normalize();
-
-  const delta = new Vector3()
-    .addScaledVector(forward, dir.z)
-    .addScaledVector(right, dir.x)
-    .multiplyScalar(speed * dt);
-
-  const p = controls.getObject().position;
-  p.add(delta);
-
-  // fix height (simple FPS)
-  p.y = 1.65;
-
-  // bounded shrine zone
-  applyBounds(p);
+  scene.add(stars);
 }
 
-// ---------- boot ----------
-initControls();
+function addFountain() {
+  // Pool rim
+  const rim = new THREE.Mesh(
+    new THREE.CylinderGeometry(3.2, 3.2, 0.45, 64, 1, true),
+    new THREE.MeshStandardMaterial({
+      color: 0x0b0c14,
+      metalness: 0.2,
+      roughness: 0.8
+    })
+  );
+  rim.position.y = 0.22;
+  scene.add(rim);
 
-(async function boot() {
-  // Load data
-  const photosData = await loadJSON("./data/photos.json");
-  const poemsData = await loadJSON("./data/poems.json");
+  // Water (simple animated shimmer)
+  const waterMat = new THREE.MeshStandardMaterial({
+    color: 0x1b3cff,
+    emissive: 0x071027,
+    roughness: 0.15,
+    metalness: 0.0,
+    transparent: true,
+    opacity: 0.55
+  });
 
-  const photoUrls = (photosData.photos || []).map(p => p.url).filter(Boolean);
-  const poemUrls = (poemsData.poems || []).map(p => p.url).filter(Boolean);
+  const water = new THREE.Mesh(
+    new THREE.CircleGeometry(3.05, 64),
+    waterMat
+  );
+  water.rotation.x = -Math.PI / 2;
+  water.position.y = 0.26;
+  water.userData.isWater = true;
+  scene.add(water);
 
-  if (photoUrls.length) photoRing = makePhotoRing(photoUrls);
+  // Center column
+  const col = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.35, 0.55, 1.1, 28),
+    new THREE.MeshStandardMaterial({
+      color: 0x0c0d16,
+      roughness: 0.6,
+      metalness: 0.25
+    })
+  );
+  col.position.y = 0.55;
+  scene.add(col);
 
-  if (poemUrls.length) {
-    const tex = await loadPoemFirst(poemUrls[0]);
-    poemPage = createPoemPage(tex);
+  // Tiny “still fountain” glow
+  const glow = new THREE.PointLight(0xa7b6ff, 1.2, 12);
+  glow.position.set(0, 1.2, 0);
+  scene.add(glow);
+}
+
+async function loadAndPlace() {
+  // These paths MUST match your repo layout
+  const photosUrl = "./data/photos.json";
+  const poemsUrl = "./data/poems.json";
+
+  let photos = [];
+  let poems = [];
+
+  try {
+    const p = await fetch(photosUrl, { cache: "no-store" }).then(r => r.json());
+    photos = Array.isArray(p.items) ? p.items : [];
+  } catch (e) {
+    console.warn("Could not load photos.json", e);
   }
 
-  // render loop
-  const clock = new THREE.Clock();
-
-  function animate() {
-    requestAnimationFrame(animate);
-    const dt = Math.min(0.05, clock.getDelta());
-    const t = clock.elapsedTime;
-
-    // animate water + poem page
-    pool.userData.water.material.uniforms.uTime.value = t;
-    if (poemPage) poemPage.material.uniforms.uTime.value = t;
-
-    // float photos gently
-    if (photoRing) {
-      for (const m of photoRing.userData.photos) {
-        const ph = m.userData.phase || 0;
-        m.position.y = m.userData.baseY + Math.sin(t * 0.8 + ph) * 0.18;
-      }
-    }
-
-    if (controls.isLocked) updateWalk(dt);
-
-    renderer.render(scene, camera);
+  try {
+    const q = await fetch(poemsUrl, { cache: "no-store" }).then(r => r.json());
+    poems = Array.isArray(q.items) ? q.items : [];
+  } catch (e) {
+    console.warn("Could not load poems.json", e);
   }
 
-  animate();
-})().catch(err => {
-  console.error(err);
-  alert(err.message || String(err));
-});
+  placeFloatingPhotos(photos);
+  placePoemsOnWater(poems);
+}
 
-// resize
-window.addEventListener("resize", () => {
+function placeFloatingPhotos(items) {
+  const loader = new THREE.TextureLoader();
+  const radius = 7.2;
+  const baseY = 1.6;
+
+  items.slice(0, 220).forEach((it, i) => {
+    const angle = (i / Math.max(items.length, 1)) * Math.PI * 2;
+    const r = radius + (Math.random() - 0.5) * 1.2;
+
+    const tex = loader.load(it.src);
+    tex.colorSpace = THREE.SRGBColorSpace;
+
+    const w = 1.35;
+    const h = 0.95;
+
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(w, h),
+      new THREE.MeshStandardMaterial({
+        map: tex,
+        transparent: true,
+        roughness: 0.8,
+        metalness: 0.0
+      })
+    );
+
+    plane.position.set(
+      Math.cos(angle) * r,
+      baseY + (Math.random() - 0.5) * 1.1,
+      Math.sin(angle) * r
+    );
+
+    // face center
+    plane.lookAt(0, baseY, 0);
+
+    // float animation params
+    plane.userData.floatPhase = Math.random() * Math.PI * 2;
+    plane.userData.floatSpeed = 0.6 + Math.random() * 0.7;
+    plane.userData.baseY = plane.position.y;
+
+    scene.add(plane);
+  });
+}
+
+function placePoemsOnWater(items) {
+  const loader = new THREE.TextureLoader();
+  const waterY = 0.265;
+
+  // Arrange poems in a gentle ring on the pool surface
+  const ringR = 1.55;
+  items.slice(0, 18).forEach((it, i) => {
+    const angle = (i / Math.max(items.length, 1)) * Math.PI * 2;
+
+    const tex = loader.load(it.src);
+    tex.colorSpace = THREE.SRGBColorSpace;
+
+    const plane = new THREE.Mesh(
+      new THREE.PlaneGeometry(1.15, 0.75),
+      new THREE.MeshStandardMaterial({
+        map: tex,
+        transparent: true,
+        roughness: 0.9,
+        metalness: 0.0,
+        opacity: 0.95
+      })
+    );
+
+    plane.rotation.x = -Math.PI / 2;
+    plane.position.set(
+      Math.cos(angle) * ringR,
+      waterY + 0.01,
+      Math.sin(angle) * ringR
+    );
+
+    scene.add(plane);
+  });
+}
+
+function onResize() {
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(window.innerWidth, window.innerHeight);
-});
+}
+
+function onKeyDown(e) {
+  if (e.code === "KeyW") moveF = 1;
+  if (e.code === "KeyS") moveF = -1;
+  if (e.code === "KeyA") moveS = -1;
+  if (e.code === "KeyD") moveS = 1;
+}
+function onKeyUp(e) {
+  if (e.code === "KeyW" || e.code === "KeyS") moveF = 0;
+  if (e.code === "KeyA" || e.code === "KeyD") moveS = 0;
+}
+
+// Touch look: drag on right side
+function setupTouchLook() {
+  let dragging = false;
+  let lastX = 0, lastY = 0;
+
+  window.addEventListener("pointerdown", (e) => {
+    // ignore joystick area
+    const rect = stickBase.getBoundingClientRect();
+    if (e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom) return;
+
+    dragging = true;
+    lastX = e.clientX;
+    lastY = e.clientY;
+  });
+
+  window.addEventListener("pointermove", (e) => {
+    if (!dragging) return;
+    const dx = e.clientX - lastX;
+    const dy = e.clientY - lastY;
+    lastX = e.clientX;
+    lastY = e.clientY;
+
+    yaw -= dx * 0.0032;
+    pitch -= dy * 0.0028;
+    pitch = Math.max(-1.2, Math.min(1.2, pitch));
+  });
+
+  window.addEventListener("pointerup", () => dragging = false);
+}
+
+function setupJoystick() {
+  let active = false;
+  let baseX = 0, baseY = 0;
+
+  stickBase.addEventListener("pointerdown", (e) => {
+    active = true;
+    stickBase.setPointerCapture(e.pointerId);
+    const rect = stickBase.getBoundingClientRect();
+    baseX = rect.left + rect.width / 2;
+    baseY = rect.top + rect.height / 2;
+    updateStick(e.clientX, e.clientY);
+  });
+
+  stickBase.addEventListener("pointermove", (e) => {
+    if (!active) return;
+    updateStick(e.clientX, e.clientY);
+  });
+
+  stickBase.addEventListener("pointerup", () => {
+    active = false;
+    stick.style.left = "50%";
+    stick.style.top = "50%";
+    moveF = 0;
+    moveS = 0;
+  });
+
+  function updateStick(x, y) {
+    const dx = x - baseX;
+    const dy = y - baseY;
+    const max = 42;
+    const mag = Math.min(max, Math.hypot(dx, dy));
+    const ang = Math.atan2(dy, dx);
+
+    const sx = Math.cos(ang) * mag;
+    const sy = Math.sin(ang) * mag;
+
+    stick.style.left = `calc(50% + ${sx}px)`;
+    stick.style.top = `calc(50% + ${sy}px)`;
+
+    // map to movement
+    moveS = sx / max;      // left/right
+    moveF = -sy / max;     // forward/back
+  }
+}
+
+function animate() {
+  requestAnimationFrame(animate);
+
+  // animate float + water shimmer
+  const t = performance.now() * 0.001;
+
+  scene.traverse((obj) => {
+    if (obj.isMesh && obj.userData.baseY != null) {
+      obj.position.y = obj.userData.baseY + Math.sin(t * obj.userData.floatSpeed + obj.userData.floatPhase) * 0.12;
+      obj.rotation.z = Math.sin(t * 0.45 + obj.userData.floatPhase) * 0.06;
+    }
+    if (obj.isMesh && obj.userData.isWater) {
+      obj.material.opacity = 0.52 + Math.sin(t * 1.3) * 0.04;
+    }
+  });
+
+  // movement
+  const speed = 0.06;
+
+  if (!isTouch && controls) {
+    const obj = controls.getObject();
+    const forward = new THREE.Vector3();
+    obj.getWorldDirection(forward);
+    forward.y = 0;
+    forward.normalize();
+
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+    velocity.set(0, 0, 0);
+    velocity.addScaledVector(forward, moveF * speed);
+    velocity.addScaledVector(right, moveS * speed);
+
+    obj.position.add(velocity);
+  }
+
+  if (isTouch) {
+    // apply yaw/pitch to camera
+    camera.rotation.order = "YXZ";
+    camera.rotation.y = yaw;
+    camera.rotation.x = pitch;
+
+    const forward = new THREE.Vector3(0, 0, -1).applyEuler(camera.rotation);
+    forward.y = 0;
+    forward.normalize();
+
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0, 1, 0)).normalize();
+
+    velocity.set(0, 0, 0);
+    velocity.addScaledVector(forward, moveF * speed);
+    velocity.addScaledVector(right, moveS * speed);
+
+    camera.position.add(velocity);
+  }
+
+  renderer.render(scene, camera);
+}
