@@ -2,6 +2,36 @@
   "photos": [
     {
       "url": "./assets/photos/img%20(7).jpg"
+    },
+    {
+      "url": "./assets/photos/img%20(15).png"
+    },
+    {
+      "url": "./assets/photos/img%20(16).jpeg"
+    },
+    {
+      "url": "./assets/photos/img%20(16).jpg"
+    },
+    {
+      "url": "./assets/photos/img%20(16).png"
+    },
+    {
+      "url": "./assets/photos/img%20(17).jpeg"
+    },
+    {
+      "url": "./assets/photos/img%20(17).png"
+    },
+    {
+      "url": "./assets/photos/img%20(18).jpeg"
+    },
+    {
+      "url": "./assets/photos/img%20(18).png"
+    },
+    {
+      "url": "./assets/photos/img%20(19).png"
+    },
+    {
+      "url": "./assets/photos/img%20(21).jpg"
     }
   ]
 }
