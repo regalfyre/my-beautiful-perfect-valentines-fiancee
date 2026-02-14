@@ -1,3 +1,13 @@
 {
-  "poems": []
+  "poems": [
+    {
+      "url": "./assets/poems/poem%20(1).png"
+    },
+    {
+      "url": "./assets/poems/poem%20(2).png"
+    },
+    {
+      "url": "./assets/poems/poem%20(3).png"
+    }
+  ]
 }
